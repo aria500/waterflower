@@ -294,6 +294,20 @@ function App(){
   // ── Sync timestamp (stored separately to avoid polluting data) ──
   function getSyncTs(){try{return JSON.parse(localStorage.getItem('wp_sync_ts'))||0}catch{return 0}}
   function setSyncTs(ts){localStorage.setItem('wp_sync_ts',JSON.stringify(ts))}
+  // When user enables sync, pull immediately
+  const prevEnabled=React.useRef(cloudConfig.enabled);
+  useEffect(()=>{
+    if(cloudConfig.enabled&&!prevEnabled.current&&cloudConfig.token&&cloudConfig.gistId){
+      pullFromCloud().then(remote=>{
+        if(remote&&remote.data){
+          const localTs=getSyncTs(),remoteTs=remote._ts||0;
+          if(remoteTs>localTs){setData(remote.data);if(remote.settings)setSettings(remote.settings);if(remote.dayNames)setDayNames(remote.dayNames);setSyncTs(remoteTs);toastMsg('已从云端拉取数据')}
+          else{pushToCloud(data,settings,dayNames);toastMsg('已推送到云端')}
+        }else{pushToCloud(data,settings,dayNames);toastMsg('已推送到云端')}
+      });
+    }
+    prevEnabled.current=cloudConfig.enabled;
+  },[cloudConfig.enabled]);
   // Sync on startup & auto-sync debounce
   const syncTimer=React.useRef(null);
   useEffect(()=>{
