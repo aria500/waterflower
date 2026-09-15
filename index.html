@@ -228,7 +228,6 @@ function migrateData(raw){
   if(!raw||typeof raw!=='object')return{};
   return Object.fromEntries(Object.entries(raw).map(([day,entry])=>[day,{...entry,drinks:Array.isArray(entry?.drinks)?entry.drinks:[],totalMl:Number(entry?.totalMl)||0,plantType:resolvePlantId(entry?.plantType||pickPlant(day))}]));
 }
-const PORTFOLIO_SHOWCASE_VERSION='2026-09-09-tulip-complete';
 const PORTFOLIO_SHOWCASE_RECORDS=[
   {time:'09:10',ml:500,text:'晨间喝水',hue:196},
   {time:'11:20',ml:500,text:'修改排版中',hue:210},
@@ -236,12 +235,15 @@ const PORTFOLIO_SHOWCASE_RECORDS=[
   {time:'16:10',ml:500,text:'休息时间',hue:238},
   {time:'19:40',ml:500,text:'听会儿音乐',hue:252},
 ];
-function applyPortfolioShowcaseData(source){
-  if(localStorage.getItem('wp_v3final_showcase_version')===PORTFOLIO_SHOWCASE_VERSION)return source;
-  return {...source,[todayKey()]:{drinks:PORTFOLIO_SHOWCASE_RECORDS.map(record=>({...record})),totalMl:2500,plantType:'tulip'}};
-}
-const GREENHOUSE_DEMO_VERSION='2026-09-13-fourteen-day-portfolio-archive-v3';
-function relativeDayKey(daysAgo){const d=new Date();d.setHours(12,0,0,0);d.setDate(d.getDate()-daysAgo);return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
+const DEMO_MODE=new URLSearchParams(window.location.search).get('demo')==='1';
+const USER_DATA_KEY='wp_v3final';
+const DEMO_DATA_KEY='wp_v3final_demo';
+const DATA_KEY=DEMO_MODE?DEMO_DATA_KEY:USER_DATA_KEY;
+const LAST_DATE_KEY=DEMO_MODE?'wp_v3final_demo_last_active_date':'wp_v3final_last_active_date';
+const SETTINGS_KEY=DEMO_MODE?'wp_v3final_demo_s':'wp_v3final_s';
+const NAMES_KEY=DEMO_MODE?'wp_v3final_demo_names':'wp_v3final_names';
+const GARDEN_NAME_KEY=DEMO_MODE?'wp_v3final_demo_garden_name':'wp_v3final_garden_name';
+const ONBOARDING_KEY=DEMO_MODE?'wp_v3final_demo_garden_onboarding':'wp_v3final_garden_onboarding';
 const GREENHOUSE_DEMO_DAYS=[
   {plantType:'tulip',drinks:[
     {time:'09:10',ml:500,text:'morning',hue:18},
@@ -290,16 +292,53 @@ const GREENHOUSE_DEMO_DAYS=[
     {time:'09:15',ml:800,text:'新的一天',hue:108},{time:'13:45',ml:800,text:'专心做作品集',hue:120},{time:'18:30',ml:900,text:'把今天收好',hue:132},
   ]},
 ];
-function applyGreenhouseDemoData(source){
-  if(localStorage.getItem('wp_v3final_greenhouse_demo_version')===GREENHOUSE_DEMO_VERSION)return source;
+function demoHistoryForDate(date){
+  const result={};
+  const base=new Date(`${date}T12:00:00`);
+  GREENHOUSE_DEMO_DAYS.forEach((entry,index)=>{
+    const day=new Date(base);day.setDate(day.getDate()-(index+1));
+    const key=`${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`;
+    const drinks=entry.drinks.map(record=>({...record}));
+    result[key]={plantType:entry.plantType,drinks,totalMl:drinks.reduce((sum,record)=>sum+record.ml,0)};
+  });
+  return result;
+}
+function applyGreenhouseDemoData(source,date){
   const seeded={...source};
-  GREENHOUSE_DEMO_DAYS.forEach((entry,index)=>{const drinks=entry.drinks.map(record=>({...record}));seeded[relativeDayKey(index)]={plantType:entry.plantType,drinks,totalMl:drinks.reduce((sum,record)=>sum+record.ml,0)}});
+  for(const [key,entry] of Object.entries(demoHistoryForDate(date))){if(!seeded[key])seeded[key]=entry}
   return seeded;
+}
+function sameShowcaseDrinks(entry,records){
+  return entry?.drinks?.length===records.length&&entry.drinks.every((drink,index)=>drink.time===records[index].time&&drink.ml===records[index].ml&&drink.text===records[index].text);
+}
+function removeLegacyShowcaseData(source){
+  if(!localStorage.getItem('wp_v3final_greenhouse_demo_version')&&!localStorage.getItem('wp_v3final_showcase_version'))return source;
+  const cleaned={...source};
+  for(const [key,entry] of Object.entries(cleaned)){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(key))continue;
+    const isArchive=GREENHOUSE_DEMO_DAYS.some(day=>entry.plantType===day.plantType&&sameShowcaseDrinks(entry,day.drinks));
+    const isTodayShowcase=key===todayKey()&&entry.plantType==='tulip'&&sameShowcaseDrinks(entry,PORTFOLIO_SHOWCASE_RECORDS);
+    if(isArchive||isTodayShowcase)delete cleaned[key];
+  }
+  return cleaned;
+}
+function ensureTodayEntry(source,date){
+  if(source[date])return source;
+  return {...source,[date]:{drinks:[],totalMl:0,plantType:pickPlant(date)}};
+}
+function initialData(){
+  let stored={};try{stored=migrateData(JSON.parse(localStorage.getItem(DATA_KEY))||{})}catch(e){}
+  const today=todayKey();
+  const lastActiveDate=localStorage.getItem(LAST_DATE_KEY);
+  const records=DEMO_MODE?applyGreenhouseDemoData(stored,today):removeLegacyShowcaseData(stored);
+  if(lastActiveDate!==today||!records[today])return ensureTodayEntry(records,today);
+  return records;
 }
 
 function App(){
-  const [data,setData]=useState(()=>{try{return applyGreenhouseDemoData(applyPortfolioShowcaseData(migrateData(JSON.parse(localStorage.getItem('wp_v3final'))||{})))}catch(e){return applyGreenhouseDemoData(applyPortfolioShowcaseData({}))}});
-  const [settings,setSettings]=useState(()=>{try{const saved=JSON.parse(localStorage.getItem('wp_v3final_s'))||{cupSize:250,dailyGoal:2000};return localStorage.getItem('wp_v3final_showcase_version')===PORTFOLIO_SHOWCASE_VERSION?saved:{...saved,dailyGoal:2500}}catch(e){return{cupSize:250,dailyGoal:2500}}});
+  const [data,setData]=useState(initialData);
+  const [settings,setSettings]=useState(()=>{try{return JSON.parse(localStorage.getItem(SETTINGS_KEY))||{cupSize:250,dailyGoal:2500}}catch(e){return{cupSize:250,dailyGoal:2500}}});
+  const [currentDate,setCurrentDate]=useState(todayKey);
   const [note,setNote]=useState('');
   const [calMonth,setCalMonth]=useState(new Date().getMonth());
   const [calYear,setCalYear]=useState(new Date().getFullYear());
@@ -313,11 +352,11 @@ function App(){
   const [plantTapActive,setPlantTapActive]=useState(false);
   const [showPlantCareTip,setShowPlantCareTip]=useState(false);
   const plantCareTimerRef=useRef(null);
-  const [dayNames,setDayNames]=useState(()=>{try{return JSON.parse(localStorage.getItem('wp_v3final_names'))||{}}catch(e){return{}}});
-  const [gardenTitle,setGardenTitle]=useState(()=>localStorage.getItem('wp_v3final_garden_name')||'我的花园');
-  const [gardenNameDraft,setGardenNameDraft]=useState(()=>localStorage.getItem('wp_v3final_garden_name')||'我的花园');
-  const [gardenNamed,setGardenNamed]=useState(()=>!!localStorage.getItem('wp_v3final_garden_name'));
-  const [showGardenNaming,setShowGardenNaming]=useState(()=>!localStorage.getItem('wp_v3final_garden_onboarding'));
+  const [dayNames,setDayNames]=useState(()=>{try{return JSON.parse(localStorage.getItem(NAMES_KEY))||{}}catch(e){return{}}});
+  const [gardenTitle,setGardenTitle]=useState(()=>localStorage.getItem(GARDEN_NAME_KEY)||'我的花园');
+  const [gardenNameDraft,setGardenNameDraft]=useState(()=>localStorage.getItem(GARDEN_NAME_KEY)||'我的花园');
+  const [gardenNamed,setGardenNamed]=useState(()=>!!localStorage.getItem(GARDEN_NAME_KEY));
+  const [showGardenNaming,setShowGardenNaming]=useState(()=>!localStorage.getItem(ONBOARDING_KEY));
   const [selectedDayKey,setSelectedDayKey]=useState(null);
   const [showFullCalendar,setShowFullCalendar]=useState(false);
   const [historyIndex,setHistoryIndex]=useState(0);
@@ -328,7 +367,7 @@ function App(){
   const historyDragRef=useRef({active:false,startX:0,startScroll:0,moved:false});
   const historyClickGuardRef=useRef(false);
 
-  const today=todayKey();
+  const today=currentDate;
   const entry=data[today]||{drinks:[],totalMl:0,plantType:pickPlant(today)};
   const growth=Math.min(entry.totalMl/(settings.dailyGoal||2000),1.05);
   const hue=entry.drinks?.length>0?entry.drinks[entry.drinks.length-1].hue:90;
@@ -339,18 +378,22 @@ function App(){
   const daisyFusionActive=PLANT_FUSION_TEST&&pt.id==='daisy'&&progressPercent>=100;
   const previousProgressRef=useRef(progressPercent);
 
-  useEffect(()=>{if(!data[today]||!data[today].plantType){setData(p=>{const n={...p};if(!n[today])n[today]={drinks:[],totalMl:0};n[today].plantType=pickPlant(today);return n})}},[today]);
-  useEffect(()=>{localStorage.setItem('wp_v3final',JSON.stringify(data))},[data]);
-  useEffect(()=>{localStorage.setItem('wp_v3final_s',JSON.stringify(settings))},[settings]);
-  useEffect(()=>{localStorage.setItem('wp_v3final_showcase_version',PORTFOLIO_SHOWCASE_VERSION)},[]);
-  useEffect(()=>{localStorage.setItem('wp_v3final_greenhouse_demo_version',GREENHOUSE_DEMO_VERSION)},[]);
-  useEffect(()=>{localStorage.setItem('wp_v3final_names',JSON.stringify(dayNames))},[dayNames]);
+  useEffect(()=>{if(!data[today]||!data[today].plantType){setData(p=>({...p,[today]:{...p[today],drinks:p[today]?.drinks||[],totalMl:p[today]?.totalMl||0,plantType:pickPlant(today)}}))}},[today]);
+  useEffect(()=>{localStorage.setItem(DATA_KEY,JSON.stringify(data));localStorage.setItem(LAST_DATE_KEY,today)},[data,today]);
+  useEffect(()=>{
+    const checkDate=()=>{const next=todayKey();if(next!==currentDate){setData(previous=>ensureTodayEntry(DEMO_MODE?applyGreenhouseDemoData(previous,next):previous,next));setCurrentDate(next)}};
+    const timer=setInterval(checkDate,30000);document.addEventListener('visibilitychange',checkDate);
+    window.addEventListener('focus',checkDate);
+    return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',checkDate);window.removeEventListener('focus',checkDate)};
+  },[currentDate]);
+  useEffect(()=>{localStorage.setItem(SETTINGS_KEY,JSON.stringify(settings))},[settings]);
+  useEffect(()=>{localStorage.setItem(NAMES_KEY,JSON.stringify(dayNames))},[dayNames]);
   useEffect(()=>()=>clearTimeout(plantCareTimerRef.current),[]);
   useEffect(()=>{const c=new Date();c.setDate(c.getDate()-90);const ck=`${c.getFullYear()}-${String(c.getMonth()+1).padStart(2,'0')}-${String(c.getDate()).padStart(2,'0')}`;setData(p=>{const n={...p};let ch=false;for(const k of Object.keys(n)){if(k<ck&&k!==today){delete n[k];ch=true}}return ch?n:p})},[today]);
   useEffect(()=>{
     const previous=previousProgressRef.current;previousProgressRef.current=progressPercent;
     if(previous<100&&progressPercent>=100){
-      const completedKey=`wp_v3final_bloomed_${today}`;
+      const completedKey=`${DEMO_MODE?'wp_v3final_demo_bloomed_':'wp_v3final_bloomed_'}${today}`;
       if(!localStorage.getItem(completedKey)){
         localStorage.setItem(completedKey,'1');setBloomPulse(k=>k+1);setShowBloom(true);setShowBloomTip(true);
         setTimeout(()=>setShowBloom(false),1450);setTimeout(()=>setShowBloomTip(false),2700);
@@ -373,11 +416,11 @@ function App(){
   function undo(){setData(p=>{if(!p[today]||p[today].drinks.length===0)return p;const n={...p};n[today]={...n[today]};const r=n[today].drinks.pop();n[today].totalMl=Math.max(0,n[today].totalMl-r.ml);return n})}
   function delDrink(idx){setData(p=>{if(!p[today])return p;const n={...p};n[today]={...n[today]};const d=[...n[today].drinks];const r=d.splice(idx,1)[0];n[today].drinks=d;n[today].totalMl=Math.max(0,n[today].totalMl-r.ml);return n})}
   function normalizeGardenName(value){return Array.from(value.trim()||'我的花园').slice(0,16).join('')}
-  function saveGardenName(){const name=normalizeGardenName(gardenNameDraft);localStorage.setItem('wp_v3final_garden_name',name);localStorage.setItem('wp_v3final_garden_onboarding','named');setGardenTitle(name);setGardenNameDraft(name);setGardenNamed(true);setShowGardenNaming(false)}
-  function skipGardenNaming(){localStorage.setItem('wp_v3final_garden_onboarding','skipped');setShowGardenNaming(false)}
+  function saveGardenName(){const name=normalizeGardenName(gardenNameDraft);localStorage.setItem(GARDEN_NAME_KEY,name);localStorage.setItem(ONBOARDING_KEY,'named');setGardenTitle(name);setGardenNameDraft(name);setGardenNamed(true);setShowGardenNaming(false)}
+  function skipGardenNaming(){localStorage.setItem(ONBOARDING_KEY,'skipped');setShowGardenNaming(false)}
 
   const stageLab=PNG_STAGE_LABELS[PNG_STAGE_BY_GROWTH_STAGE[growthStage]-1];
-  const historyDays=(()=>{const days=[],now=new Date();for(let i=0;i<14;i++){const d=new Date(now);d.setDate(d.getDate()-i);days.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`)}return days})();
+  const historyDays=(()=>{const days=[],now=new Date(`${today}T12:00:00`);for(let i=0;i<(DEMO_MODE?15:14);i++){const d=new Date(now);d.setDate(d.getDate()-i);days.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`)}return days})();
   const activeHistoryKey=historyDays[Math.max(0,Math.min(historyIndex,historyDays.length-1))]||today;
   const activeHistoryEntry=data[activeHistoryKey];
   const [activeHistoryYear,activeHistoryMonth,activeHistoryDay]=activeHistoryKey.split('-').map(Number);
